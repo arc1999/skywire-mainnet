@@ -70,6 +70,11 @@ func (p *Proc) Logs() appcommon.LogStore {
 	return p.logDB
 }
 
+// Name returns the internal cmd.
+func (p *Proc) Cmd() *exec.Cmd {
+	return p.cmd
+}
+
 // InjectConn introduces the connection to the Proc after it is started.
 // Only the first call will return true.
 // It also prepares the RPC gateway.

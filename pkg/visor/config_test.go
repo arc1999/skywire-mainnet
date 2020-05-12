@@ -87,7 +87,7 @@ func TestAppsConfig(t *testing.T) {
 }
 
 func TestAppsDir(t *testing.T) {
-	conf := Config{AppsPath: "apps"}
+	conf := Config{AppBinPath: "apps"}
 
 	dir, err := conf.AppsDir()
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestAppsDir(t *testing.T) {
 }
 
 func TestLocalDir(t *testing.T) {
-	conf := Config{LocalPath: "local"}
+	conf := Config{AppLocalPath: "local"}
 	dir, err := conf.LocalDir()
 	require.NoError(t, err)
 

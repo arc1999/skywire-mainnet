@@ -93,14 +93,14 @@ func fillInOldKeys(confPath string, conf *visor.Config) error {
 
 func homeConfig() *visor.Config {
 	c := defaultConfig()
-	c.AppsPath = filepath.Join(pathutil.HomeDir(), ".skycoin/skywire/apps")
+	c.AppBinPath = filepath.Join(pathutil.HomeDir(), ".skycoin/skywire/apps")
 	c.Transport.LogStore.Location = filepath.Join(pathutil.HomeDir(), ".skycoin/skywire/transport_logs")
 	return c
 }
 
 func localConfig() *visor.Config {
 	c := defaultConfig()
-	c.AppsPath = "/usr/local/skycoin/skywire/apps"
+	c.AppBinPath = "/usr/local/skycoin/skywire/apps"
 	c.Transport.LogStore.Location = "/usr/local/skycoin/skywire/transport_logs"
 	return c
 }
@@ -124,7 +124,7 @@ func defaultConfig() *visor.Config {
 	conf.Dmsg = visor.DefaultDmsgConfig()
 
 	ptyConf := defaultDmsgPtyConfig()
-	conf.DmsgPty = &ptyConf
+	conf.Dmsgpty = &ptyConf
 
 	// TODO(evanlinjin): We have disabled skysocks passcode by default for now - We should make a cli arg for this.
 	//passcode := base64.StdEncoding.Strict().EncodeToString(cipher.RandByte(8))
@@ -147,8 +147,8 @@ func defaultConfig() *visor.Config {
 
 	conf.AppDiscovery = visor.DefaultAppDiscConfig()
 
-	conf.AppsPath = visor.DefaultAppsPath
-	conf.LocalPath = visor.DefaultLocalPath
+	conf.AppBinPath = visor.DefaultAppBinPath
+	conf.AppLocalPath = visor.DefaultAppLocalPath
 
 	conf.LogLevel = visor.DefaultLogLevel
 	conf.ShutdownTimeout = visor.DefaultTimeout
@@ -171,8 +171,8 @@ func defaultConfig() *visor.Config {
 	return conf
 }
 
-func defaultDmsgPtyConfig() visor.DmsgPtyConfig {
-	return visor.DmsgPtyConfig{
+func defaultDmsgPtyConfig() visor.DmsgptyConfig {
+	return visor.DmsgptyConfig{
 		Port:     skyenv.DmsgPtyPort,
 		AuthFile: "./skywire/dmsgpty/whitelist.json",
 		CLINet:   skyenv.DefaultDmsgPtyCLINet,

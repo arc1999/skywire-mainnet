@@ -177,9 +177,9 @@ func (r *RPC) Summary(_ *struct{}, out *Summary) (err error) {
 	defer rpcutil.LogCall(r.log, "Summary", nil)(out, &err)
 
 	var summaries []*TransportSummary
-	r.visor.tm.WalkTransports(func(tp *transport.ManagedTransport) bool {
+	r.visor.tpM.WalkTransports(func(tp *transport.ManagedTransport) bool {
 		summaries = append(summaries,
-			newTransportSummary(r.visor.tm, tp, false, r.visor.router.SetupIsTrusted(tp.Remote())))
+			newTransportSummary(r.visor.tpM, tp, false, r.visor.router.SetupIsTrusted(tp.Remote())))
 		return true
 	})
 	*out = Summary{
@@ -254,7 +254,7 @@ func (r *RPC) SetSocksClientPK(in *cipher.PubKey, _ *struct{}) (err error) {
 func (r *RPC) TransportTypes(_ *struct{}, out *[]string) (err error) {
 	defer rpcutil.LogCall(r.log, "TransportTypes", nil)(out, &err)
 
-	*out = r.visor.tm.Networks()
+	*out = r.visor.tpM.Networks()
 	return nil
 }
 
@@ -291,9 +291,9 @@ func (r *RPC) Transports(in *TransportsIn, out *[]*TransportSummary) (err error)
 		}
 		return true
 	}
-	r.visor.tm.WalkTransports(func(tp *transport.ManagedTransport) bool {
-		if typeIncluded(tp.Type()) && pkIncluded(r.visor.tm.Local(), tp.Remote()) {
-			*out = append(*out, newTransportSummary(r.visor.tm, tp, in.ShowLogs, r.visor.router.SetupIsTrusted(tp.Remote())))
+	r.visor.tpM.WalkTransports(func(tp *transport.ManagedTransport) bool {
+		if typeIncluded(tp.Type()) && pkIncluded(r.visor.tpM.Local(), tp.Remote()) {
+			*out = append(*out, newTransportSummary(r.visor.tpM, tp, in.ShowLogs, r.visor.router.SetupIsTrusted(tp.Remote())))
 		}
 		return true
 	})
@@ -304,11 +304,11 @@ func (r *RPC) Transports(in *TransportsIn, out *[]*TransportSummary) (err error)
 func (r *RPC) Transport(in *uuid.UUID, out *TransportSummary) (err error) {
 	defer rpcutil.LogCall(r.log, "Transport", in)(out, &err)
 
-	tp := r.visor.tm.Transport(*in)
+	tp := r.visor.tpM.Transport(*in)
 	if tp == nil {
 		return ErrNotFound
 	}
-	*out = *newTransportSummary(r.visor.tm, tp, true, r.visor.router.SetupIsTrusted(tp.Remote()))
+	*out = *newTransportSummary(r.visor.tpM, tp, true, r.visor.router.SetupIsTrusted(tp.Remote()))
 	return nil
 }
 
@@ -332,12 +332,12 @@ func (r *RPC) AddTransport(in *AddTransportIn, out *TransportSummary) (err error
 		defer cancel()
 	}
 
-	tp, err := r.visor.tm.SaveTransport(ctx, in.RemotePK, in.TpType)
+	tp, err := r.visor.tpM.SaveTransport(ctx, in.RemotePK, in.TpType)
 	if err != nil {
 		return err
 	}
 
-	*out = *newTransportSummary(r.visor.tm, tp, false, r.visor.router.SetupIsTrusted(tp.Remote()))
+	*out = *newTransportSummary(r.visor.tpM, tp, false, r.visor.router.SetupIsTrusted(tp.Remote()))
 	return nil
 }
 
@@ -345,7 +345,7 @@ func (r *RPC) AddTransport(in *AddTransportIn, out *TransportSummary) (err error
 func (r *RPC) RemoveTransport(tid *uuid.UUID, _ *struct{}) (err error) {
 	defer rpcutil.LogCall(r.log, "RemoveTransport", tid)(nil, &err)
 
-	r.visor.tm.DeleteTransport(*tid)
+	r.visor.tpM.DeleteTransport(*tid)
 	return nil
 }
 

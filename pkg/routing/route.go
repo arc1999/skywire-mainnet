@@ -66,7 +66,7 @@ type Hop struct {
 	To   cipher.PubKey
 }
 
-// Path is a list of hops between nodes (transports), and indicates a route between the edges
+// path is a list of hops between nodes (transports), and indicates a route between the edges
 type Path []Hop
 
 func (h Hop) String() string {

@@ -163,7 +163,7 @@ func TestStartStopApp(t *testing.T) {
 	visor := &Visor{
 		router:   r,
 		appsConf: apps,
-		logger:   logging.MustGetLogger("test"),
+		log:      logging.MustGetLogger("test"),
 		conf:     &visorCfg,
 	}
 
@@ -234,12 +234,12 @@ These tests have been commented out for the following reasons:
 //	visor := &Visor{
 //		config:      conf,
 //		router:      r,
-//		tm:          tm1,
+//		tpM:          tm1,
 //		rt:          routing.New(),
 //		executer:    executer,
 //		appsConf:    apps,
 //		startedApps: map[string]*appBind{},
-//		logger:      logging.MustGetLogger("test"),
+//		log:      logging.MustGetLogger("test"),
 //	}
 //	pathutil.EnsureDir(visor.dir())
 //	defer func() {
@@ -297,13 +297,13 @@ These tests have been commented out for the following reasons:
 //		t.Run("RPCServer", func(t *testing.T) {
 //			var out []byte
 //			require.NoError(t, gateway.Exec(&command, &out))
-//			assert.Equal(t, []byte("1\n"), out)
+//			assert.Equal(t, []byte("1\net"), out)
 //		})
 //
 //		t.Run("RPCClient", func(t *testing.T) {
 //			out, err := client.Exec(command)
 //			require.NoError(t, err)
-//			assert.Equal(t, []byte("1\n"), out)
+//			assert.Equal(t, []byte("1\net"), out)
 //		})
 //	})
 //
@@ -381,7 +381,7 @@ These tests have been commented out for the following reasons:
 //
 //	t.Run("Transport", func(t *testing.T) {
 //		var ids []uuid.UUID
-//		visor.tm.WalkTransports(func(tp *transport.ManagedTransport) bool {
+//		visor.tpM.WalkTransports(func(tp *transport.ManagedTransport) bool {
 //			ids = append(ids, tp.RuleEntry.ID)
 //			return true
 //		})

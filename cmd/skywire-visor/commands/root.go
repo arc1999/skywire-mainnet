@@ -182,7 +182,7 @@ func (cfg *runCfg) readConfig() *runCfg {
 
 	cfg.logger.Infof("Config: %#v", &cfg.conf)
 
-	cfg.conf.Path = configPath
+	cfg.conf.path = configPath
 
 	return cfg
 }
@@ -201,8 +201,8 @@ func (cfg *runCfg) runVisor() *runCfg {
 
 	time.Sleep(startDelay)
 
-	if cfg.conf.DmsgPty != nil {
-		if err := visor.UnlinkSocketFiles(cfg.conf.DmsgPty.CLIAddr); err != nil {
+	if cfg.conf.Dmsgpty != nil {
+		if err := visor.UnlinkSocketFiles(cfg.conf.Dmsgpty.CLIAddr); err != nil {
 			cfg.logger.Fatal("failed to unlink socket files: ", err)
 		}
 	}

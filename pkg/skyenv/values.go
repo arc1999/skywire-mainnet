@@ -39,6 +39,12 @@ const (
 
 	DefaultDmsgPtyCLINet  = "unix"
 	DefaultDmsgPtyCLIAddr = "/tmp/dmsgpty.sock"
+	DefaultDmsgPtyWhitelist = "./dmsgpty/whitelist.json"
+)
+
+// Default STCP constants.
+const (
+	DefaultSTCPAddr = ":7777"
 )
 
 // Default skywire app constants.
@@ -64,12 +70,22 @@ const (
 
 // RPC constants.
 const (
+	DefaultRPCAddr = "localhost:3435"
 	DefaultRPCTimeout = time.Second * 5
 )
 
-// Default skywire app discovery constants
+// Default skywire app server and discovery constants
 const (
+	DefaultAppSrvAddr     = "localhost:5505"
 	AppDiscUpdateInterval = time.Second * 30
+	DefaultAppLocalPath = "./local"
+	DefaultAppBinPath = "./apps"
+	DefaultLogLevel = "info"
+)
+
+// Default routing constants
+const (
+	DefaultTpLogStore = "./transport_logs"
 )
 
 // MustPK unmarshals string PK to cipher.PubKey. It panics if unmarshaling fails.

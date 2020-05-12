@@ -51,7 +51,7 @@ func TestMain(m *testing.M) {
 //	}))
 //	defer srv.Close()
 //
-//	conf := Config{LocalPath: "local", AppsPath: "apps"}
+//	conf := Config{AppLocalPath: "local", AppBinPath: "apps"}
 //	conf.Visor.PubKey = pk
 //	conf.Visor.SecKey = sk
 //	conf.Dmsg.Discovery = "http://skywire.skycoin.com:8002"
@@ -120,7 +120,7 @@ func TestVisorStartClose(t *testing.T) {
 		conf:     &visorCfg,
 		router:   r,
 		appsConf: apps,
-		logger:   logger,
+		log:      logger,
 	}
 
 	appPID1 := appcommon.ProcID(10)
@@ -143,7 +143,7 @@ func TestVisorStartClose(t *testing.T) {
 	}
 
 	tm, err := transport.NewManager(network, tmConf)
-	visor.tm = tm
+	visor.tpM = tm
 	require.NoError(t, err)
 
 	errCh := make(chan error)
@@ -190,7 +190,7 @@ func TestVisorSpawnApp(t *testing.T) {
 	visor := &Visor{
 		router:   r,
 		appsConf: apps,
-		logger:   logging.MustGetLogger("test"),
+		log:      logging.MustGetLogger("test"),
 		conf:     &visorCfg,
 	}
 
@@ -233,7 +233,7 @@ func TestVisorSpawnAppValidations(t *testing.T) {
 
 	visor := &Visor{
 		router: r,
-		logger: logging.MustGetLogger("test"),
+		log:    logging.MustGetLogger("test"),
 		conf:   c,
 	}
 
