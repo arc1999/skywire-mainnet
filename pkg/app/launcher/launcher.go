@@ -4,15 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/SkycoinProject/dmsg"
-	"github.com/SkycoinProject/dmsg/cipher"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appcommon"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appnet"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appserver"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/router"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/routing"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/util/pathutil"
-	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +11,17 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/SkycoinProject/dmsg"
+	"github.com/SkycoinProject/dmsg/cipher"
+	"github.com/sirupsen/logrus"
+
+	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appcommon"
+	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appnet"
+	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appserver"
+	"github.com/SkycoinProject/skywire-mainnet/pkg/router"
+	"github.com/SkycoinProject/skywire-mainnet/pkg/routing"
+	"github.com/SkycoinProject/skywire-mainnet/pkg/util/pathutil"
 )
 
 var (
@@ -36,27 +38,27 @@ type AppConfig struct {
 }
 
 type Config struct {
-	VisorPK cipher.PubKey
-	Apps []AppConfig
+	VisorPK    cipher.PubKey
+	Apps       []AppConfig
 	ServerAddr string
 	BinPath    string
-	LocalPath string
+	LocalPath  string
 }
 
 type Launcher struct {
-	conf Config
-	log logrus.FieldLogger
-	r   router.Router
+	conf  Config
+	log   logrus.FieldLogger
+	r     router.Router
 	procM appserver.ProcManager
-	apps map[string]AppConfig
-	mx sync.Mutex
+	apps  map[string]AppConfig
+	mx    sync.Mutex
 }
 
 func NewLauncher(log logrus.FieldLogger, conf Config, dmsgC *dmsg.Client, r router.Router, procM appserver.ProcManager) (*Launcher, error) {
 	launcher := &Launcher{
-		conf: conf,
-		log:  log,
-		r:    r,
+		conf:  conf,
+		log:   log,
+		r:     r,
 		procM: procM,
 	}
 

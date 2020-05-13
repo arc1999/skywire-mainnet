@@ -2,40 +2,29 @@
 package visor
 
 import (
-	"bufio"
-	"context"
 	"errors"
 	"fmt"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/launcher"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
-	"github.com/SkycoinProject/dmsg"
+	"github.com/sirupsen/logrus"
+
+	"github.com/SkycoinProject/skywire-mainnet/pkg/app/launcher"
+
 	"github.com/SkycoinProject/dmsg/cipher"
 	"github.com/SkycoinProject/dmsg/dmsgpty"
 	"github.com/SkycoinProject/skycoin/src/util/logging"
 
-	"github.com/SkycoinProject/skywire-mainnet/internal/vpn"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appcommon"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appdisc"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appnet"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appserver"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/restart"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/routefinder/rfclient"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/router"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/routing"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/skyenv"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/snet"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/transport"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/util/pathutil"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/util/updater"
 )
 
@@ -53,13 +42,15 @@ const (
 // Visor provides messaging runtime for Apps by setting up all
 // necessary connections and performing messaging gateway functions.
 type Visor struct {
-	ctx  context.Context
-	cancel context.CancelFunc // cancel is to be called when visor.Close is triggered
-	wg   *sync.WaitGroup
-	errCh chan vErr
-	log  *logging.Logger
+	//ctx      context.Context
+	//cancel   context.CancelFunc // cancel is to be called when visor.Close is triggered
+	//wg       *sync.WaitGroup
+
+	reportCh   chan vReport
+	closeStack []closeElem
 
 	conf *Config
+	log  *logging.Logger
 
 	net    *snet.Network
 	pty    *dmsgpty.Host
@@ -77,24 +68,29 @@ type Visor struct {
 	hvErrs map[cipher.PubKey]chan error // errors returned when the associated hypervisor ServeRPCClient returns
 }
 
-type vErr struct {
-	err error
+type vReport struct {
 	src string
+	err error
 }
 
-func (v *Visor) reporter(src string) func(err error) bool {
+type reportFunc func(err error) bool
+
+func (v *Visor) makeReporter(src string) reportFunc {
 	return func(err error) bool {
-		v.errCh <- vErr{src: src, err: err}
+		v.reportCh <- vReport{src: src, err: err}
 		return err == nil
 	}
 }
 
-func (v *Visor) processReports(ok *bool) {
+func (v *Visor) processReports(log logrus.FieldLogger, ok *bool) {
+	if log == nil {
+		log = v.log
+	}
 	for {
 		select {
-		case ve := <- v.errCh:
-			if ve.err != nil {
-				v.log.WithError(ve.err).WithField("_src", ve.src).Error()
+		case report := <-v.reportCh:
+			if report.err != nil {
+				v.log.WithError(report.err).WithField("_src", report.src).Error()
 				*ok = false
 			}
 		default:
@@ -103,56 +99,66 @@ func (v *Visor) processReports(ok *bool) {
 	}
 }
 
+type closeElem struct {
+	src string
+	fn  func() bool
+}
+
+func (v *Visor) pushCloseStack(src string, fn func() bool) {
+	v.closeStack = append(v.closeStack, closeElem{src: src, fn: fn})
+}
+
 // MasterLogger returns the underlying master logger (currently contained in visor config).
 func (v *Visor) MasterLogger() *logging.MasterLogger {
 	return v.conf.log
 }
 
 // NewVisor constructs new Visor.
-func NewVisor(ctx context.Context, conf *Config, restartCtx *restart.Context) (v *Visor, ok bool) {
-	ctx, cancel := context.WithCancel(ctx)
-
+func NewVisor(conf *Config, restartCtx *restart.Context) (v *Visor, ok bool) {
 	v = &Visor{
-		ctx:  ctx,
-		cancel: cancel,
-		wg:   new(sync.WaitGroup),
-		errCh: make(chan vErr, 100),
-		log:  conf.log.PackageLogger("v"),
-		conf: conf,
+		reportCh:   make(chan vReport, 100),
+		log:        conf.log.PackageLogger("v"),
+		conf:       conf,
+		restartCtx: restartCtx,
 	}
 
 	if lvl, err := logging.LevelFromString(conf.LogLevel); err == nil {
 		v.conf.log.SetLevel(lvl)
 	}
 
-	v.log.WithField("public_key", conf.KeyPair.PubKey).Info("Starting...")
+	v.log.WithField("public_key", conf.KeyPair.PubKey).Info("Starting visor.")
 	v.startedAt = time.Now()
 
-	defer v.processReports(&ok)
+	startStack := []startFunc{
+		initRestartAndUpdater,
+		initSNet,
+		initDmsgpty,
+		initTransport,
+		initRouter,
+		initLauncher,
+		initCLI,
+		initHypervisors,
+		initUptimeTracker,
+	}
 
-	if !initRestartAndUpdater(v, restartCtx) {
-		return v, false
-	}
-	if !initSNet(v) {
-		return v, false
-	}
-	if !initDmsgpty(v) {
-		return v, false
-	}
-	if !initTransport(v) {
-		return v, false
-	}
-	if !initRouter(v) {
-		return v, false
-	}
-	if !initLauncher(v) {
-		return v, false
-	}
-	if !initCLI(v) {
-		return v, false
-	}
-	if !initHypervisors(v) {
-		return v, false
+	log := v.MasterLogger().PackageLogger("visor.startup")
+
+	for i, startFn := range startStack {
+		name := runtime.FuncForPC(uintptr(unsafe.Pointer(&startFn))).Name()
+		start := time.Now()
+
+		log := log.
+			WithField("name", name).
+			WithField("stack", fmt.Sprintf("%d/%d", i+1, len(startStack)))
+		log.Info("Starting module...")
+
+		if ok := startFn(v); !ok {
+			log.WithField("elapsed", time.Since(start)).Error("Failed to start module.")
+			v.processReports(log, &ok)
+			return v, ok
+		}
+
+		log.WithField("elapsed", time.Since(start)).Info("Module started successfully.")
 	}
 
 	return v, ok
@@ -164,11 +170,40 @@ func (v *Visor) Close() error {
 		return nil
 	}
 
-	v.cancel()
-	v.wg.Wait()
+	log := v.MasterLogger().PackageLogger("visor.close_stack")
+	log.Info("Begin shutdown.")
+
+	for i, ce := range v.closeStack {
+
+		start := time.Now()
+		done := make(chan bool, 1)
+		t := time.NewTimer(time.Second * 2)
+
+		log := log.
+			WithField("name", ce.src).
+			WithField("stack", fmt.Sprintf("%d/%d", i+1, len(v.closeStack)))
+		log.Info("Closing stack element...")
+
+		go func(ce closeElem) {
+			done <- ce.fn()
+			close(done)
+		}(ce)
+
+		select {
+		case ok := <-done:
+			if !ok {
+				log.WithField("elapsed", time.Since(start)).Warn("Closed with unexpected result.")
+				v.processReports(log, &ok)
+				continue
+			}
+			log.WithField("elapsed", time.Since(start)).Info("Closed successfully.")
+		case <-t.C:
+			log.WithField("elapsed", time.Since(start)).Error("Timeout.")
+		}
+	}
 
 	var ok bool
-	v.processReports(&ok)
+	v.processReports(v.log, &ok)
 	return nil
 }
 
@@ -204,17 +239,12 @@ func (v *Visor) UpdateAvailable() (*updater.Version, error) {
 }
 
 func (v *Visor) setAutoStart(appName string, autoStart bool) error {
-	appConf, ok := v.appsConf[appName]
-	if !ok {
+	if _, ok := v.launch.AppState(appName); !ok {
 		return ErrAppProcNotRunning
 	}
 
-	appConf.AutoStart = autoStart
-	v.appsConf[appName] = appConf
-
 	v.log.Infof("Saving auto start = %v for app %v to config", autoStart, appName)
-
-	return v.updateAppAutoStart(appName, autoStart)
+	return v.conf.UpdateAppAutostart(v.launch, appName, autoStart)
 }
 
 func (v *Visor) setSocksPassword(password string) error {
@@ -225,13 +255,13 @@ func (v *Visor) setSocksPassword(password string) error {
 		passcodeArgName = "-passcode"
 	)
 
-	if err := v.updateAppArg(socksName, passcodeArgName, password); err != nil {
+	if err := v.conf.UpdateAppArg(v.launch, socksName, passcodeArgName, password); err != nil {
 		return err
 	}
 
 	if _, ok := v.procM.ProcByName(socksName); ok {
 		v.log.Infof("Updated %v password, restarting it", socksName)
-		return v.RestartApp(socksName)
+		return v.launch.RestartApp(socksName)
 	}
 
 	v.log.Infof("Updated %v password", socksName)
@@ -247,73 +277,16 @@ func (v *Visor) setSocksClientPK(pk cipher.PubKey) error {
 		pkArgName       = "-srv"
 	)
 
-	if err := v.updateAppArg(socksClientName, pkArgName, pk.String()); err != nil {
+	if err := v.conf.UpdateAppArg(v.launch, socksClientName, pkArgName, pk.String()); err != nil {
 		return err
 	}
 
 	if _, ok := v.procM.ProcByName(socksClientName); ok {
 		v.log.Infof("Updated %v PK, restarting it", socksClientName)
-		return v.RestartApp(socksClientName)
+		return v.launch.RestartApp(socksClientName)
 	}
 
 	v.log.Infof("Updated %v PK", socksClientName)
-
-	return nil
-}
-
-func (v *Visor) updateAppAutoStart(appName string, autoStart bool) error {
-	changed := false
-
-	for i := range v.conf.Apps {
-		if v.conf.Apps[i].App == appName {
-			v.conf.Apps[i].AutoStart = autoStart
-			if v, ok := v.appsConf[appName]; ok {
-				v.AutoStart = autoStart
-				v.appsConf[appName] = v
-			}
-
-			changed = true
-			break
-		}
-	}
-
-	if !changed {
-		return nil
-	}
-
-	return v.conf.Flush()
-}
-
-func (v *Visor) updateAppArg(appName, argName, value string) error {
-	configChanged := true
-
-	for i := range v.conf.Apps {
-		argChanged := false
-		if v.conf.Apps[i].App == appName {
-			configChanged = true
-
-			for j := range v.conf.Apps[i].Args {
-				if v.conf.Apps[i].Args[j] == argName && j+1 < len(v.conf.Apps[i].Args) {
-					v.conf.Apps[i].Args[j+1] = value
-					argChanged = true
-					break
-				}
-			}
-
-			if !argChanged {
-				v.conf.Apps[i].Args = append(v.conf.Apps[i].Args, argName, value)
-			}
-
-			if v, ok := v.appsConf[appName]; ok {
-				v.Args = v.conf.Apps[i].Args
-				v.appsConf[appName] = v
-			}
-		}
-	}
-
-	if configChanged {
-		return v.conf.Flush()
-	}
 
 	return nil
 }

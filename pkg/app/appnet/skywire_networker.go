@@ -3,14 +3,16 @@ package appnet
 import (
 	"context"
 	"errors"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/SkycoinProject/dmsg/netutil"
+
 	"github.com/SkycoinProject/skywire-mainnet/pkg/router"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/routing"
 )

@@ -1,16 +1,24 @@
 package visor
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
 	"github.com/SkycoinProject/dmsg"
 	"github.com/SkycoinProject/dmsg/cipher"
 	"github.com/SkycoinProject/dmsg/dmsgpty"
+
+	"github.com/SkycoinProject/skywire-mainnet/internal/utclient"
 	"github.com/SkycoinProject/skywire-mainnet/internal/vpn"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appdisc"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/app/appserver"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/app/launcher"
-	"github.com/SkycoinProject/skywire-mainnet/pkg/restart"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/routefinder/rfclient"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/router"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/setup/setupclient"
@@ -19,30 +27,26 @@ import (
 	"github.com/SkycoinProject/skywire-mainnet/pkg/transport"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/transport/tpdclient"
 	"github.com/SkycoinProject/skywire-mainnet/pkg/util/updater"
-	"net"
-	"os"
-	"path/filepath"
-	"time"
 )
 
-func initRestartAndUpdater(v *Visor, restartCtx *restart.Context) bool {
-	report := v.reporter("restart")
+type startFunc func(v *Visor) bool
+
+func initRestartAndUpdater(v *Visor) bool {
+	report := v.makeReporter("restart")
 
 	restartCheckDelay, err := time.ParseDuration(v.conf.RestartCheckDelay)
 	if err != nil {
 		return report(err)
 	}
 
-	restartCtx.SetCheckDelay(restartCheckDelay)
-	restartCtx.RegisterLogger(v.log)
-
-	v.restartCtx = restartCtx
-	v.updater = updater.New(v.log, restartCtx, v.conf.Launcher.BinPath)
+	v.restartCtx.SetCheckDelay(restartCheckDelay)
+	v.restartCtx.RegisterLogger(v.log)
+	v.updater = updater.New(v.log, v.restartCtx, v.conf.Launcher.BinPath)
 	return report(nil)
 }
 
 func initSNet(v *Visor) bool {
-	report := v.reporter("dmsg/stcp")
+	report := v.makeReporter("snet")
 
 	n := snet.New(snet.Config{
 		PubKey: v.conf.KeyPair.PubKey,
@@ -50,20 +54,19 @@ func initSNet(v *Visor) bool {
 		Dmsg:   v.conf.Dmsg,
 		STCP:   v.conf.STCP,
 	})
-	if err := n.Init(v.ctx); err != nil {
+	if err := n.Init(); err != nil {
 		return report(err)
 	}
-	go func() {
-		<-v.ctx.Done()
-		report(n.Close())
-	}()
+	v.pushCloseStack("snet", func() bool {
+		return report(n.Close())
+	})
 
 	v.net = n
 	return report(nil)
 }
 
 func initDmsgpty(v *Visor) bool {
-	report := v.reporter("dmsgpty")
+	report := v.makeReporter("dmsgpty")
 	conf := v.conf.Dmsgpty
 
 	if conf == nil {
@@ -89,13 +92,23 @@ func initDmsgpty(v *Visor) bool {
 	pty := dmsgpty.NewHost(dmsgC, wl)
 
 	if ptyPort := conf.Port; ptyPort != 0 {
-		v.wg.Add(1)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		wg := new(sync.WaitGroup)
+		wg.Add(1)
+
 		go func() {
-			defer v.wg.Done()
-			if err := pty.ListenAndServe(v.ctx, ptyPort); err != nil {
+			defer wg.Done()
+			if err := pty.ListenAndServe(ctx, ptyPort); err != nil {
 				report(fmt.Errorf("listen and serve stopped: %w", err))
 			}
 		}()
+
+		v.pushCloseStack("dmsgpty.serve", func() bool {
+			cancel()
+			wg.Wait()
+			return report(nil)
+		})
 	}
 
 	if conf.CLINet != "" {
@@ -109,18 +122,24 @@ func initDmsgpty(v *Visor) bool {
 		if err != nil {
 			return report(fmt.Errorf("failed to start dmsgpty cli listener: %w", err))
 		}
-		go func() {
-			<-v.ctx.Done()
-			report(cliL.Close())
-		}()
 
-		v.wg.Add(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		wg := new(sync.WaitGroup)
+		wg.Add(1)
+
 		go func() {
-			defer v.wg.Done()
-			if err := pty.ServeCLI(v.ctx, cliL); err != nil {
+			defer wg.Done()
+			if err := pty.ServeCLI(ctx, cliL); err != nil {
 				report(fmt.Errorf("serve cli stopped: %w", err))
 			}
 		}()
+
+		v.pushCloseStack("dmsgpty.cli", func() bool {
+			cancel()
+			ok := report(cliL.Close())
+			wg.Wait()
+			return ok
+		})
 	}
 
 	v.pty = pty
@@ -128,7 +147,7 @@ func initDmsgpty(v *Visor) bool {
 }
 
 func initTransport(v *Visor) bool {
-	report := v.reporter("transport")
+	report := v.makeReporter("transport")
 	conf := v.conf.Transport
 
 	tpdC, err := tpdclient.NewHTTP(conf.Discovery, v.conf.KeyPair.PubKey, v.conf.KeyPair.SecKey)
@@ -161,23 +180,29 @@ func initTransport(v *Visor) bool {
 	if err != nil {
 		return report(fmt.Errorf("failed to start transport manager: %w", err))
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+
 	go func() {
-		<-v.ctx.Done()
-		report(tpM.Close())
+		defer wg.Done()
+		tpM.Serve(ctx)
 	}()
 
-	v.wg.Add(1)
-	go func() {
-		defer v.wg.Done()
-		tpM.Serve(v.ctx)
-	}()
+	v.pushCloseStack("transport.manager", func() bool {
+		cancel()
+		ok := report(tpM.Close())
+		wg.Wait()
+		return ok
+	})
 
 	v.tpM = tpM
 	return report(nil)
 }
 
 func initRouter(v *Visor) bool {
-	report := v.reporter("router")
+	report := v.makeReporter("router")
 	conf := v.conf.Routing
 
 	rConf := router.Config{
@@ -195,27 +220,37 @@ func initRouter(v *Visor) bool {
 		return report(fmt.Errorf("failed to create router: %w", err))
 	}
 
-	v.wg.Add(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+
 	go func() {
-		defer v.wg.Done()
-		if err := r.Serve(v.ctx); err != nil {
+		defer wg.Done()
+		if err := r.Serve(ctx); err != nil {
 			report(fmt.Errorf("serve router stopped: %w", err))
 		}
 	}()
+
+	v.pushCloseStack("router.serve", func() bool {
+		cancel()
+		ok := report(r.Close())
+		wg.Wait()
+		return ok
+	})
 
 	v.router = r
 	return report(nil)
 }
 
 func initLauncher(v *Visor) bool {
-	report := v.reporter("launcher")
+	report := v.makeReporter("launcher")
 	conf := v.conf.Launcher
 
 	// Prepare app discovery factory.
-	factory := appdisc.Factory{ Log: v.MasterLogger().PackageLogger("app_disc") }
+	factory := appdisc.Factory{Log: v.MasterLogger().PackageLogger("app_disc")}
 	if conf.Discovery != nil {
 		factory.PK = v.conf.KeyPair.PubKey
-		factory.SK =  v.conf.KeyPair.SecKey
+		factory.SK = v.conf.KeyPair.SecKey
 		factory.UpdateInterval = time.Duration(conf.Discovery.UpdateInterval)
 		factory.ProxyDisc = conf.Discovery.ProxyDisc
 	}
@@ -226,12 +261,10 @@ func initLauncher(v *Visor) bool {
 	if err != nil {
 		return report(fmt.Errorf("failed to start proc_manager: %w", err))
 	}
-	v.wg.Add(1)
-	go func() {
-		defer v.wg.Done()
-		<-v.ctx.Done()
-		report(procM.Close())
-	}()
+
+	v.pushCloseStack("launcher.proc_manager", func() bool {
+		return report(procM.Close())
+	})
 
 	// Prepare launcher.
 	launchConf := launcher.Config{
@@ -246,7 +279,7 @@ func initLauncher(v *Visor) bool {
 	if err != nil {
 		return report(fmt.Errorf("failed to start launcher: %w", err))
 	}
-	launch.AutoStart(map[string]func() []string {
+	launch.AutoStart(map[string]func() []string{
 		skyenv.VPNClientName: func() []string { return makeVPNEnvs(v.conf, v.net) },
 		skyenv.VPNServerName: func() []string { return makeVPNEnvs(v.conf, v.net) },
 	})
@@ -286,7 +319,7 @@ func makeVPNEnvs(conf *Config, n *snet.Network) []string {
 }
 
 func initCLI(v *Visor) bool {
-	report := v.reporter("cli")
+	report := v.makeReporter("cli")
 
 	if v.conf.CLIAddr == "" {
 		v.log.Info("'cli_addr' is not configured, skipping.")
@@ -297,10 +330,10 @@ func initCLI(v *Visor) bool {
 	if err != nil {
 		return report(err)
 	}
-	go func() {
-		<-v.ctx.Done()
-		report(cliL.Close())
-	}()
+
+	v.pushCloseStack("cli.listener", func() bool {
+		return report(cliL.Close())
+	})
 
 	rpcS, err := newRPCServer(v, "CLI")
 	if err != nil {
@@ -312,7 +345,7 @@ func initCLI(v *Visor) bool {
 }
 
 func initHypervisors(v *Visor) bool {
-	report := v.reporter("hypervisor")
+	report := v.makeReporter("hypervisor")
 
 	v.hvErrs = make(map[cipher.PubKey]chan error, len(v.conf.Hypervisors))
 	for _, hv := range v.conf.Hypervisors {
@@ -328,12 +361,58 @@ func initHypervisors(v *Visor) bool {
 			return report(fmt.Errorf("failed to start RPC server for hypervisor %s: %w", hvPK, err))
 		}
 
-		v.wg.Add(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		wg := new(sync.WaitGroup)
+		wg.Add(1)
+
 		go func(hvErrs chan error) {
-			defer v.wg.Done()
-			ServeRPCClient(v.ctx, log, v.net, rpcS, addr, hvErrs)
+			defer wg.Done()
+			ServeRPCClient(ctx, log, v.net, rpcS, addr, hvErrs)
 		}(hvErrs)
+
+		v.pushCloseStack("hypervisor."+hvPK.String()[:shortHashLen], func() bool {
+			cancel()
+			wg.Wait()
+			return true
+		})
 	}
 
 	return report(nil)
+}
+
+func initUptimeTracker(v *Visor) bool {
+	report := v.makeReporter("uptime_tracker")
+	conf := v.conf.UptimeTracker
+
+	if conf == nil {
+		v.log.Info("'uptime_tracker' is not configured, skipping.")
+		return true
+	}
+
+	ut, err := utclient.NewHTTP(conf.Addr, v.conf.KeyPair.PubKey, v.conf.KeyPair.SecKey)
+	if err != nil {
+		// TODO(evanlinjin): We should design utclient to not retry here.
+		//return report(err)
+		v.log.WithError(err).Warn("Failed to connect to uptime tracker.")
+		return true
+	}
+
+	log := v.MasterLogger().PackageLogger("uptime_tracker")
+	ticker := time.NewTicker(1 * time.Second)
+
+	go func() {
+		for range ticker.C {
+			ctx := context.Background()
+			if err := ut.UpdateVisorUptime(ctx); err != nil {
+				log.WithError(err).Warn("Failed to update visor uptime.")
+			}
+		}
+	}()
+
+	v.pushCloseStack("uptime_tracker", func() bool {
+		ticker.Stop()
+		return report(nil)
+	})
+
+	return true
 }

@@ -123,7 +123,7 @@ func NewRaw(conf Config, dmsgC *dmsg.Client, stcpC *stcp.Client) *Network {
 }
 
 // Init initiates server connections.
-func (n *Network) Init(_ context.Context) error {
+func (n *Network) Init() error {
 	if n.dmsgC != nil {
 		time.Sleep(200 * time.Millisecond)
 		go n.dmsgC.Serve()

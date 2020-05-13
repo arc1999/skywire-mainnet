@@ -37,8 +37,8 @@ const (
 const (
 	DmsgPtyPort = uint16(22)
 
-	DefaultDmsgPtyCLINet  = "unix"
-	DefaultDmsgPtyCLIAddr = "/tmp/dmsgpty.sock"
+	DefaultDmsgPtyCLINet    = "unix"
+	DefaultDmsgPtyCLIAddr   = "/tmp/dmsgpty.sock"
 	DefaultDmsgPtyWhitelist = "./dmsgpty/whitelist.json"
 )
 
@@ -70,7 +70,7 @@ const (
 
 // RPC constants.
 const (
-	DefaultRPCAddr = "localhost:3435"
+	DefaultRPCAddr    = "localhost:3435"
 	DefaultRPCTimeout = time.Second * 5
 )
 
@@ -78,9 +78,9 @@ const (
 const (
 	DefaultAppSrvAddr     = "localhost:5505"
 	AppDiscUpdateInterval = time.Second * 30
-	DefaultAppLocalPath = "./local"
-	DefaultAppBinPath = "./apps"
-	DefaultLogLevel = "info"
+	DefaultAppLocalPath   = "./local"
+	DefaultAppBinPath     = "./apps"
+	DefaultLogLevel       = "info"
 )
 
 // Default routing constants
